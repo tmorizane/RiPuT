@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RiPuT 2.1: RIS/PubMed format to Reference Table (High Performance)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+	<script src="https://stat.zanet.biz/js/riput2.1.js"></script>
+    <style>
+        .drop-zone { border: 2px dashed #cbd5e1; transition: all 0.3s ease; }
+        .drop-zone.hover { border-color: #3b82f6; background-color: #eff6ff; }
+        table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+        th, td { border: 1px solid #e2e8f0; padding: 12px 10px; text-align: left; vertical-align: top; word-wrap: break-word; }
+        th { background-color: #f8fafc; position: sticky; top: 0; z-index: 10; }
+        .markdown-body { line-height: 1.6; font-size: 0.9rem; }
+        .modal { display: none; position: fixed; z-index: 50; left: 0; top: 0; width: 100%; height: 100%; background: transparent; backdrop-filter: blur(0); }
+        .modal-content { background: white; margin: 5% auto; padding: 30px; width: 90%; max-width: 900px; max-height: 85vh; overflow-y: auto; border-radius: 12px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); }
+        .comment-cell { padding: 0 !important; position: relative; height: 100px; }
+        .comment-area { position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; display: block; border: none; outline: none; padding: 12px; background-color: transparent; overflow-y: auto; white-space: pre-wrap; cursor: pointer; }
+        .comment-area:empty::before { content: "Notes..."; color: #94a3b8; font-style: italic; }
+        .bg-selected-cyan { background-color: #a5f3fc !important; } 
+        .bg-selected-gray { background-color: #e5e7eb !important; }
+        @media print { .no-print { display: none !important; } }
+    </style>
+</head>
+<body class="bg-slate-50 min-h-screen p-4 md:p-8 font-sans text-slate-900">
+    <div class="max-w-7xl mx-auto">
+        <header class="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center">
+            <h1 class="text-2xl font-bold text-slate-800">RiPuT 2.1: RIS/PubMed format to Reference Table</h1>
+            <div class="flex items-center gap-4 mt-2 md:mt-0">
+                <!-- 独自検索機能 (Global Search) -->
+                <div class="flex items-center gap-2 bg-white px-2 py-1 rounded-lg border border-slate-300 shadow-sm">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                    <input type="text" id="globalSearchInput" onkeyup="if(event.key==='Enter') executeSearch()" placeholder="Search all references..." class="outline-none text-sm w-48 focus:w-64 transition-all duration-300">
+                    <button onclick="executeSearch()" class="text-xs font-bold text-blue-600 hover:text-blue-800 ml-1">Search</button>
+                    <button onclick="clearSearch()" class="text-xs font-bold text-slate-400 hover:text-slate-600 ml-1">Clear</button>
+                </div>
+                <button id="headerApiKeyBtn" onclick="openApiKeyModal()" class="text-sm font-semibold flex items-center gap-1 text-slate-400 hover:text-slate-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path></svg>
+                    API Settings
+                </button>
+            </div>
+        </header>
+
+        <div id="feedingUI" class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4 no-print hidden">
+            <div id="dropZone" class="drop-zone rounded-xl p-5 flex flex-col items-center justify-center bg-white cursor-pointer h-32" onclick="document.getElementById('fileInput').click()">
+                <p class="text-slate-700 font-bold text-sm text-center">Drop RIS, PubMed, Ichushi, Excel or App HTML here</p>
+                <input type="file" id="fileInput" class="hidden" accept=".ris,.txt,.htm,.html,.xlsx,.xls" multiple onchange="handleFiles(this.files)">
+                <p class="mt-2 text-xs text-blue-600 underline font-bold">Select File(s)</p>
+            </div>
+            <div class="bg-white p-4 rounded-xl border border-slate-200 flex flex-col h-32">
+                <h2 class="font-bold text-sm mb-2 border-b pb-1 text-slate-800">Status</h2>
+                <div id="status" class="text-xs space-y-1 flex-grow overflow-y-auto font-mono text-slate-600"></div>
+            </div>
+        </div>
+
+        <div class="flex flex-wrap justify-between items-center mb-6 gap-4 no-print">
+            <div class="flex flex-wrap items-center gap-3">
+                <button id="modeToggleBtn" onclick="toggleMode()" class="px-6 py-2 text-sm font-bold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg">Study Selection Mode</button>
+                <div id="conditionBadges" class="flex flex-wrap gap-1.5 text-xs font-mono font-bold text-slate-700"></div>
+                <!-- MEMO Button -->
+                <button id="memoBtn" onclick="openMemoModal()" class="px-4 py-1.5 text-xs font-bold text-slate-500 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 transition-colors">MEMO</button>
+				<button id="importSessionBtn" onclick="document.getElementById('importSessionInput').click()" class="px-4 py-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-300 rounded-lg hover:bg-emerald-100 transition-colors flex items-center gap-1 shadow-sm" title="Import settings, scores, and comments from a saved HTML file">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                    Import Session
+                </button>
+                <input type="file" id="importSessionInput" class="hidden" accept=".htm,.html" onchange="handleImportSession(this.files)">
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <button onclick="clearTable()" class="px-4 py-2 text-xs font-bold text-red-600 bg-white border border-red-200 rounded-lg">Clear Table</button>
+                <button onclick="saveExcel()" class="px-4 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-lg">Save Excel</button>
+                
+				<button onclick="document.getElementById('excelFileInput').click()" class="px-4 py-2 text-xs font-bold text-indigo-700 bg-white border border-indigo-200 rounded-lg">Open Excel</button>
+                <input type="file" id="excelFileInput" class="hidden" accept=".xlsx,.xls" onchange="handleExcelImport(this.files)">
+               
+			   <button onclick="saveTable()" class="px-4 py-2 text-xs font-bold text-white bg-slate-800 rounded-lg shadow-sm">Save HTML</button>
+                <button onclick="document.getElementById('htmlFileInput').click()" class="px-4 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-lg">Open HTML</button>
+                <input type="file" id="htmlFileInput" class="hidden" accept=".htm,.html" onchange="handleOpenHtml(this.files)">
+                <button onclick="gatherUp()" class="px-4 py-2 text-xs font-bold text-white bg-blue-600 rounded-lg shadow-sm">Gather Up</button>
+                <button onclick="openSaveFilterModal()" class="px-4 py-2 text-xs font-bold text-teal-700 bg-teal-50 border border-teal-200 rounded-lg shadow-sm">Save Filtered</button>
+                <button onclick="handleSaveAbstracts(event)" class="px-4 py-2 text-xs font-bold text-white bg-purple-600 rounded-lg shadow-sm" title="Shift+Click to Import">Save Abstracts</button>
+<input type="file" id="abstractFileInput" class="hidden" accept=".txt" multiple onchange="importAbstractsFiles(this.files)">
+                <button onclick="saveDividedAbstracts()" class="px-4 py-2 text-xs font-bold text-white bg-fuchsia-600 rounded-lg shadow-sm">Save Divided</button>
+                
+                <button onclick="openScreeningModal()" class="px-4 py-2 text-xs font-bold text-white bg-indigo-800 rounded-lg shadow-sm flex items-center gap-1 hover:bg-indigo-900 transition">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                    Ask Gemini
+                </button>
+                
+                <button onclick="sortAiScore(event)" class="px-4 py-2 text-xs font-bold text-white bg-orange-600 rounded-lg shadow-sm flex items-center gap-1 hover:bg-orange-700 transition" title="Shift+Click to Undo">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h12M3 18h6"/></svg>
+                    Sort AI Score
+                </button>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden mb-20">
+		    <div id="topPagination" class="flex justify-center items-center gap-4 py-3 bg-slate-50 border-b border-slate-200 hidden no-print">
+                <button onclick="prevPage()" class="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg font-bold text-sm text-slate-700 transition shadow-sm">Previous</button>
+                <div class="text-sm font-bold text-slate-700">
+                    Page <input type="number" id="topPageInput" class="w-16 text-center border border-slate-300 rounded-md p-1 mx-1 focus:ring-2 focus:ring-blue-400 outline-none" min="1" onchange="jumpToPage(this.value)"> / <span id="topTotalPages">1</span>
+                </div>
+                <button onclick="nextPage()" class="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg font-bold text-sm text-slate-700 transition shadow-sm">Next</button>
+                <div class="text-xs text-slate-500 ml-4 font-mono">Found: <span id="filteredCountTop">0</span> items</div>
+            </div>
+            <div class="overflow-x-auto">
+                <table id="referenceTable">
+                    <thead>
+                        <tr>
+                            <th style="width: 60px;" class="text-center">No</th>
+                            <th style="width: 170px;">Reference ID</th>
+                            <th style="width: auto;">Bibliographic Information</th>
+                            <th style="width: 110px;">Link</th>
+                            <th style="width: 180px;">Comment</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody"></tbody>
+                </table>
+            </div>
+			<div id="bottomPagination" class="flex justify-center items-center gap-4 py-3 bg-slate-50 border-t border-slate-200 hidden no-print">
+                <button onclick="prevPage()" class="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg font-bold text-sm text-slate-700 transition shadow-sm">Previous</button>
+                <div class="text-sm font-bold text-slate-700">
+                    Page <input type="number" id="bottomPageInput" class="w-16 text-center border border-slate-300 rounded-md p-1 mx-1 focus:ring-2 focus:ring-blue-400 outline-none" min="1" onchange="jumpToPage(this.value)"> / <span id="bottomTotalPages">1</span>
+                </div>
+                <button onclick="nextPage()" class="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg font-bold text-sm text-slate-700 transition shadow-sm">Next</button>
+            </div>		
+        </div>
+    </div>
+
+    <!-- Modals (API, Screening, etc.) Remain Unchanged -->
+    <!-- API Settings Modal -->
+    <div id="apiKeyModal" class="modal" onclick="closeApiKeyModal()" style="display: none;">
+        <div class="modal-content max-w-2xl" onclick="event.stopPropagation()">
+            <div class="flex justify-between items-center mb-6 border-b pb-4">
+                <h3 class="text-2xl font-bold">API Settings</h3>
+                <button onclick="closeApiKeyModal()" class="text-slate-400 hover:text-slate-600 p-2"><svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+            </div>
+            <div class="space-y-4">
+                <div class="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                    <label class="block text-sm font-bold mb-1 text-slate-700">Google Gemini API Key</label>
+                    <div class="relative">
+                        <input type="password" id="geminiApiKeyInput" class="w-full p-2.5 bg-white border rounded-lg outline-none pr-12 font-mono text-sm" placeholder="AIzaSy...">
+                        <button type="button" onclick="togglePasswordVisibility()" class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600">
+                            <svg id="eyeIcon" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                        </button>
+                    </div>
+                    <!-- 復活させたリンク -->
+                    <p class="text-xs text-slate-500 mt-2">Get one at <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-blue-600 hover:underline font-bold">Google AI Studio</a>.</p>
+                </div>
+
+                <div class="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                    <label class="block text-sm font-bold mb-1 text-slate-700">OpenAI API Key (ChatGPT)</label>
+                    <div class="relative">
+                        <input type="password" id="openaiApiKeyInput" class="w-full p-2.5 bg-white border rounded-lg outline-none pr-12 font-mono text-sm" placeholder="sk-...">
+                    </div>
+                    <!-- 復活させたリンク -->
+                    <p class="text-xs text-slate-500 mt-2">Get one at <a href="https://platform.openai.com/api-keys" target="_blank" class="text-blue-600 hover:underline font-bold">OpenAI Platform</a>.</p>
+                </div>
+
+                <div class="p-4 bg-indigo-50 rounded-xl border border-indigo-100">
+                    <div class="flex items-center justify-between mb-4 border-b border-indigo-200 pb-3">
+                        <span onclick="fetchAvailableModels()" class="text-sm font-bold text-indigo-700 cursor-pointer hover:underline flex items-center gap-1">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path d="M12 8v4l3 3"/></svg>
+                            Fetch Available Models
+                        </span>
+                        <div class="text-xs font-bold text-indigo-800 bg-indigo-100 px-3 py-1 rounded-full" id="currentModelDisplay">
+                            Screening: None | Adapt: None
+                        </div>
+                    </div>
+                    
+                    <div class="flex flex-col gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-indigo-800 mb-1">AI-Screening Model <span class="text-indigo-500 font-normal">(Used for scoring papers)</span></label>
+                            <select id="modelSelect" class="w-full text-sm border border-indigo-200 rounded-lg p-2 bg-white focus:ring-2 focus:ring-indigo-400 outline-none shadow-sm"></select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-indigo-800 mb-1">AI-Adaptation Model <span class="text-indigo-500 font-normal">(Used for high-sensitivity criteria generation)</span></label>
+                            <select id="adaptModelSelect" class="w-full text-sm border border-indigo-200 rounded-lg p-2 bg-white focus:ring-2 focus:ring-indigo-400 outline-none shadow-sm"></select>
+                        </div>
+                    </div>
+                    <div class="mt-4 flex justify-end">
+                        <button onclick="confirmModelSelection()" class="px-6 py-2.5 bg-indigo-700 text-white text-sm font-bold rounded-lg hover:bg-indigo-800 shadow-sm transition">Set Models</button>
+                    </div>
+                </div>
+            </div>
+            <div class="mt-8 flex justify-end gap-2 border-t pt-6">
+                <button onclick="removeApiKey()" class="text-xs font-bold text-red-600 hover:underline mr-auto">Remove Keys</button>
+                <button onclick="closeApiKeyModal()" class="px-6 py-2 text-sm font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg">Cancel</button>
+                <button onclick="saveApiKey()" class="px-8 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-md transition">Save Keys & Models</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI Screening Modal -->
+    <div id="screeningModal" class="modal" onclick="closeScreeningModal()">
+        <div id="screeningModalContent" class="modal-content max-w-2xl min-h-[550px]" onclick="event.stopPropagation()">
+            <div id="screeningModalHeader" class="flex justify-between items-center mb-4 border-b pb-2 cursor-move select-none">
+                <h3 class="text-xl font-bold text-indigo-700 flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                    AI Screening (TIAB)
+                </h3>
+                <button onclick="closeScreeningModal()" class="text-slate-400 hover:text-slate-600 p-2 cursor-pointer"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+            </div>
+
+            <div class="mb-4">
+                <label class="block text-sm font-bold text-slate-700 mb-1">Inclusion Criteria</label>
+                <textarea id="inclusionCriteria" oninput="clearOptimizedCriteria()" class="w-full p-3 border border-slate-300 rounded-lg outline-none resize-none text-sm h-16 focus:ring-2 focus:ring-indigo-400" placeholder="Enter inclusion criteria..."></textarea>
+            </div>
+            <div class="mb-4">
+                <label class="block text-sm font-bold text-slate-700 mb-1">Exclusion Criteria</label>
+                <textarea id="exclusionCriteria" oninput="clearOptimizedCriteria()" class="w-full p-3 border border-slate-300 rounded-lg outline-none resize-none text-sm h-16 focus:ring-2 focus:ring-indigo-400" placeholder="Enter exclusion criteria..."></textarea>
+            </div>
+
+            <div class="flex flex-col gap-3 pb-5 border-b border-slate-200 mb-5">
+                <!-- 上段：ボタン類（右寄せ） -->
+                <div class="flex justify-end items-center w-full">
+                    <div class="flex gap-2 items-center shrink-0">
+                        <button onclick="resetScreeningScores()" class="px-4 py-2 bg-slate-200 text-slate-700 hover:bg-slate-300 rounded-lg text-sm font-bold transition-colors">Reset</button>
+                        <button id="btnCancelScreening" onclick="cancelScreening()" class="hidden px-6 py-2 bg-rose-500 hover:bg-rose-600 text-white rounded-lg text-sm font-bold transition shadow-sm">Stop</button>
+                        <button id="btnStartScreening" onclick="startScreening(false)" class="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-bold transition flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed">
+                            Start Screening ↑
+                            <span id="indicatorNormal" class="hidden relative flex h-3 w-3 ml-2">
+                                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                <span class="relative inline-flex rounded-full h-3 w-3 bg-rose-500"></span>
+                            </span>
+                        </button>
+                        <button onclick="showPromptModal(false)" class="px-3 py-2 bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-700 rounded-lg text-xs font-bold border border-slate-300 transition-colors shadow-sm tracking-wide">
+                            PROMPT
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- 下段：ステータス表示（左）と Batch/Workers設定（右） -->
+                <div class="flex justify-between items-center w-full">
+                    <!-- ▼ 移動したステータス表示 ▼ -->
+                    <div id="screeningStatus" class="text-xs font-bold text-indigo-600"></div>
+                    
+                    <div class="flex items-center gap-1.5 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm shrink-0">
+                        <label class="text-[10px] font-bold text-slate-500 uppercase cursor-help" title="Number of articles per API request. If frequent errors, set to a small number.">Batch:</label>
+                        <div class="flex items-center shadow-sm">
+                            <input type="number" id="chunkSizeInput" value="50" min="1" max="200" class="w-14 p-0.5 border border-slate-300 rounded-l text-xs outline-none bg-white text-center focus:ring-1 focus:ring-indigo-400">
+                            <select onchange="document.getElementById('chunkSizeInput').value = this.value; this.selectedIndex = 0;" class="w-5 p-0.5 border border-l-0 border-slate-300 rounded-r text-xs outline-none bg-slate-200 cursor-pointer text-slate-600 hover:bg-slate-300 transition-colors" style="appearance: none; text-align-last: center;" title="Presets">
+                                <option value="" disabled selected>▼</option>
+                                <option value="5">5</option>
+                                <option value="10">10</option>
+                                <option value="20">20</option>
+                                <option value="30">30</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
+                        </div>
+                        
+                        <label class="text-[10px] font-bold text-slate-500 uppercase ml-3 cursor-help" title="Number of concurrent API requests (Parallel processing). If frequent errors, set to a small number.">Workers:</label>
+						<input type="number" id="concurrencyInput" value="10" min="1" max="10" class="w-10 p-0.5 border border-slate-300 rounded text-xs outline-none bg-white text-center shadow-sm focus:ring-1 focus:ring-indigo-400">
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex flex-col items-center justify-center mb-3 gap-3">
+                <div class="flex flex-col gap-1.5 w-full bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                    <label class="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-600 hover:text-slate-800 transition-colors">
+                        <input type="checkbox" id="ignoreOutcomeCheck" onchange="syncAdditionalPrompt()" class="w-3.5 h-3.5 text-teal-600 rounded border-slate-300 focus:ring-teal-500">
+                        Without outcome specification (not to exclude on insufficient outcome information)
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-600 hover:text-slate-800 transition-colors">
+                        <input type="checkbox" id="ignoreRctCheck" onchange="syncAdditionalPrompt()" class="w-3.5 h-3.5 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500">
+                        Adjust for NO explicit RCT specification (absent random, randomized, etc.)
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-600 hover:text-slate-800 transition-colors">
+                        <input type="checkbox" id="ignoreMixedCheck" onchange="syncAdditionalPrompt()" class="w-3.5 h-3.5 text-blue-600 rounded border-slate-300 focus:ring-blue-500">
+                        Adjust for mixed populations and multi-arm trials (assign Score 3 if eligible parts exist)
+                    </label>
+                    <div id="additionalPromptContainer" class="mt-2 border-t border-slate-200 pt-2">
+                        <label class="block text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider">Additions to Prompt (English):</label>
+                        <textarea id="additionalPromptArea" oninput="updateConditionBadges()" class="w-full p-2 border border-slate-300 rounded bg-white outline-none resize-y text-xs h-24 focus:ring-2 focus:ring-indigo-400 font-mono text-slate-700" placeholder="Type custom rules here..."></textarea>
+                    </div>
+                </div>
+
+                <div class="flex flex-row items-center justify-center gap-3 w-full mt-2">
+                    <button id="btnAdaptCriteria" onclick="adaptCriteriaForAI(event)" title="Shift+Click to enter criteria manually" class="px-6 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-full text-sm font-bold shadow-sm flex items-center gap-2 transition-all">
+					<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg>
+					Adapt for High Sensitivity Criteria
+					</button>	
+                    <button onclick="openAdaptPromptModal()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-full text-xs font-bold border border-slate-300 shadow-sm transition-colors">
+                        Edit Prompt for Adaptation
+                    </button>
+                </div>	
+
+                <div class="w-full flex flex-col bg-pink-50/50 p-2.5 rounded-lg border border-pink-100">
+                    <label class="flex items-center gap-2 cursor-pointer text-xs font-bold text-pink-600 hover:text-pink-800 transition-colors w-fit">
+                        <input type="checkbox" id="sensitivityCheck" class="w-3.5 h-3.5 text-pink-600 rounded border-slate-300 focus:ring-pink-500">
+                        Sensitivity Analysis (Output reasons for Score 1 & 2)
+                    </label>
+                    <div id="sensitivityLogContainer" class="hidden w-full mt-2 pt-2 border-t border-pink-200">
+                        <div class="flex justify-between items-center mb-1">
+                            <label class="block text-xs font-bold text-pink-700 uppercase tracking-wider">Sensitivity Analysis Log</label>
+                            <button onclick="copyReasonsToComment()" class="px-3 py-1 bg-pink-600 hover:bg-pink-700 text-white text-[10px] font-bold rounded shadow-sm transition-colors">Copy reasons to Comment</button>
+                        </div>
+                        <textarea id="sensitivityLogArea" class="w-full p-2 border border-pink-300 rounded-lg outline-none resize-y text-xs h-32 bg-white focus:ring-2 focus:ring-pink-400 font-mono text-slate-800" readonly placeholder="Reasons for exclusion (Score 1, 2) will be listed here..."></textarea>
+                    </div>
+                </div>
+            </div>
+            <div id="optimizedPromptArea" class="hidden p-4 bg-teal-50 border border-teal-200 rounded-xl transition-all">
+                <label class="block text-xs font-bold text-teal-700 mb-2 uppercase tracking-wider">Optimized Prompt for AI</label>
+                <textarea id="optimizedCriteria" class="w-full p-3 border border-teal-300 rounded-lg outline-none resize-none text-sm h-48 bg-white focus:ring-2 focus:ring-teal-400 font-mono" placeholder="AI-optimized criteria will appear here..."></textarea>
+                
+                <div class="flex justify-end mt-3 gap-2">
+                    <button id="btnStartOptimized" onclick="startScreening(true)" class="px-6 py-2 bg-indigo-800 hover:bg-indigo-900 text-white rounded-lg text-sm font-bold shadow-md flex items-center justify-center transition disabled:opacity-50 disabled:cursor-not-allowed">
+                        Start Screening ↓
+                        <span id="indicatorOptimized" class="hidden relative flex h-3 w-3 ml-2">
+                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                            <span class="relative inline-flex rounded-full h-3 w-3 bg-rose-500"></span>
+                        </span>
+                    </button>
+                    <button onclick="showPromptModal(true)" class="px-3 py-2 bg-teal-50 text-teal-600 hover:bg-teal-100 hover:text-teal-800 rounded-lg text-xs font-bold border border-teal-200 transition-colors shadow-sm tracking-wide">
+                        PROMPT
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Other modals ... -->
+    <div id="commentModal" class="modal" oncontextmenu="saveAndCloseComment(event)" onclick="closeCommentModal()">
+        <div class="modal-content max-w-2xl" onclick="event.stopPropagation()">
+            <div class="flex justify-between items-center mb-4 border-b pb-2">
+                <div class="flex items-center gap-3"><h3 class="text-xl font-bold text-slate-800">Edit Comment</h3><div id="commentModalRefInfo" class="text-xs font-semibold bg-blue-50 px-2 py-1 rounded border border-blue-200 text-blue-600"></div></div>
+                <button onclick="closeCommentModal()" class="text-slate-400 hover:text-slate-600 p-2"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+            </div>
+            <textarea id="commentEditorTextarea" class="w-full h-64 p-4 border border-slate-300 rounded-lg outline-none resize-none text-sm"></textarea>
+            <input type="hidden" id="editingCommentUuid">
+            <div class="mt-4 flex justify-between items-center text-xs text-slate-400 italic"><span>Right-click anywhere to Save & Close</span><button onclick="saveAndCloseComment(event)" class="px-6 py-2 bg-blue-600 text-white rounded-lg font-bold">Save & Close</button></div>
+        </div>
+    </div>
+
+    <div id="messageModal" class="modal" style="z-index: 100;"><div class="modal-content max-w-sm mt-[20vh] text-center"><div id="messageText" class="text-slate-800 font-bold mb-6"></div><button onclick="closeMessageModal()" class="w-full py-3 bg-blue-600 text-white rounded-xl font-bold">OK</button></div></div>
+	
+	<div id="memoModal" class="modal" onclick="closeMemoModal()" style="display: none; z-index: 60;">
+        <div class="modal-content max-w-4xl" onclick="event.stopPropagation()">
+            <div class="flex justify-between items-center mb-4 border-b pb-4">
+                <h3 class="text-2xl font-bold text-slate-800 flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                    Project Memo
+                </h3>
+                <button onclick="closeMemoModal()" class="text-slate-400 hover:text-slate-600 p-2"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+            </div>
+            <p class="text-sm text-slate-500 mb-3">Record your search strategies, project status, or overall notes here. This will be saved with "Save HTML".</p>
+            <textarea id="projectMemoArea" class="w-full h-[50vh] p-4 border border-slate-300 rounded-lg outline-none resize-y text-sm font-sans text-slate-800 focus:ring-2 focus:ring-amber-400" placeholder="Type your notes here..."></textarea>
+            <div class="mt-6 flex justify-end">
+                <button onclick="saveMemo()" class="px-8 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold shadow-md transition-colors">Save & Close</button>
+            </div>
+        </div>
+    </div>
+    
+	<div id="saveFilterModal" class="hidden fixed inset-0 bg-slate-900 bg-opacity-50 z-50 flex items-center justify-center">
+        <div class="bg-white p-6 rounded-lg shadow-xl w-[400px]">
+            <h3 class="text-lg font-bold mb-4">Save Filtered References</h3>
+            <p class="text-sm text-slate-600 mb-4">Select the condition to extract and save:</p>
+            
+            <div class="flex flex-col gap-2 mb-4">
+                <!-- Checkboxes... -->
+                <label class="flex items-center justify-between p-2 hover:bg-slate-50 rounded cursor-pointer transition-colors border border-transparent hover:border-slate-200">
+                    <div class="flex items-center gap-2">
+                        <input type="radio" name="saveFilter" value="5" onchange="updateSaveFilterMessage()" class="w-4 h-4 text-teal-600">
+                        <span class="text-sm font-bold">AI Score = 5</span>
+                    </div>
+                    <span id="count-5" class="text-sm font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">0</span>
+                </label>
+                <label class="flex items-center justify-between p-2 hover:bg-slate-50 rounded cursor-pointer transition-colors border border-transparent hover:border-slate-200">
+                    <div class="flex items-center gap-2">
+                        <input type="radio" name="saveFilter" value="4" onchange="updateSaveFilterMessage()" class="w-4 h-4 text-teal-600">
+                        <span class="text-sm font-bold">AI Score ≥ 4</span>
+                    </div>
+                    <span id="count-4" class="text-sm font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">0</span>
+                </label>
+                <label class="flex items-center justify-between p-2 hover:bg-slate-50 rounded cursor-pointer transition-colors border border-transparent hover:border-slate-200">
+                    <div class="flex items-center gap-2">
+                        <input type="radio" name="saveFilter" value="3" onchange="updateSaveFilterMessage()" class="w-4 h-4 text-teal-600">
+                        <span class="text-sm font-bold">AI Score ≥ 3</span>
+                    </div>
+                    <span id="count-3" class="text-sm font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">0</span>
+                </label>
+                <label class="flex items-center justify-between p-2 hover:bg-slate-50 rounded cursor-pointer transition-colors border border-transparent hover:border-slate-200">
+                    <div class="flex items-center gap-2">
+                        <input type="radio" name="saveFilter" value="2" onchange="updateSaveFilterMessage()" class="w-4 h-4 text-teal-600">
+                        <span class="text-sm font-bold">AI Score ≥ 2</span>
+                    </div>
+                    <span id="count-2" class="text-sm font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">0</span>
+                </label>
+                <label class="flex items-center justify-between p-2 hover:bg-slate-50 rounded cursor-pointer transition-colors border border-transparent hover:border-slate-200">
+                    <div class="flex items-center gap-2">
+                        <input type="radio" name="saveFilter" value="1" onchange="updateSaveFilterMessage()" class="w-4 h-4 text-teal-600">
+                        <span class="text-sm font-bold">AI Score ≥ 1</span>
+                    </div>
+                    <span id="count-1" class="text-sm font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded">0</span>
+                </label>
+                <label class="flex items-center justify-between p-2 hover:bg-slate-50 rounded cursor-pointer transition-colors border border-transparent hover:border-slate-200">
+                    <div class="flex items-center gap-2">
+                        <input type="radio" name="saveFilter" value="cyan" onchange="updateSaveFilterMessage()" class="w-4 h-4 text-teal-600" checked>
+                        <span class="text-sm font-bold">Cyan Selection (Original)</span>
+                    </div>
+                    <span id="count-cyan" class="text-sm font-mono font-bold text-cyan-800 bg-cyan-100 px-2 py-0.5 rounded">0</span>
+                </label>
+				<label class="flex items-center justify-between p-2 hover:bg-slate-50 rounded cursor-pointer transition-colors border border-transparent hover:border-slate-200">
+				<div class="flex items-center gap-2">
+				<input type="radio" name="saveFilter" value="noAbstract" onchange="updateSaveFilterMessage()" class="w-4 h-4 text-teal-600">
+				<span class="text-sm font-bold">No Abstract</span>
+				</div>
+				<span id="count-noAbstract" class="text-sm font-mono font-bold text-slate-600 bg-slate-200 px-2 py-0.5 rounded">0</span>
+				</label>
+            </div>
+            
+            <div id="saveFilterMessage" class="text-sm font-bold text-indigo-600 mb-6 min-h-[40px] whitespace-pre-line p-3 bg-indigo-50 rounded-lg"></div>
+            
+            <div class="flex justify-between items-center mt-2 border-t border-slate-100 pt-4">
+                <button onclick="exportRocData()" class="px-3 py-2 text-xs font-bold text-pink-600 bg-pink-50 hover:bg-pink-100 border border-pink-200 rounded-lg transition-colors shadow-sm flex items-center gap-1" title="Export AI Scores and Target (Cyan) info as CSV">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                    Export Data for ROC (CSV)
+                </button>
+                <div class="flex justify-end gap-3">
+                    <button onclick="closeSaveFilterModal()" class="px-4 py-2 text-sm font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors">Cancel</button>
+                    <button id="btnExecuteSaveFilter" onclick="executeSaveFiltered()" class="px-4 py-2 text-sm font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors shadow-sm">OK</button>
+                </div>
+            </div>
+        </div>
+    </div>
+	
+    <div id="abstractModal" class="modal" onclick="closeModal()">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="flex justify-between items-center mb-6 border-b pb-4"><div class="flex items-center gap-4"><h3 class="text-2xl font-bold">Abstract</h3><div id="modalRefInfo" class="text-sm font-semibold bg-slate-100 px-3 py-1 rounded-lg text-slate-600"></div></div><button onclick="closeModal()" class="text-slate-400 p-2"><svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button></div>
+            <div id="modalBody" class="text-sm text-justify mb-6 whitespace-pre-wrap leading-relaxed"></div>
+            <div class="mt-10 pt-6 border-t">
+                <div class="flex flex-wrap justify-between items-center gap-4 mb-4">
+                    <div class="flex gap-2">
+                        <button id="translateBtn" onclick="handleTranslate()" class="px-6 py-2.5 bg-teal-600 text-white rounded-xl font-bold shadow-sm">Translate to Japanese</button>
+                        <button id="askGeminiBtn" onclick="toggleAskGemini()" class="px-6 py-2.5 bg-indigo-600 text-white rounded-xl font-bold shadow-sm">Ask Gemini</button>
+                    </div>
+                    <button onclick="closeModal()" class="px-10 py-3 bg-slate-100 text-slate-700 rounded-xl font-bold">Close</button>
+                </div>
+                
+                <div id="askGeminiArea" class="hidden py-4 border-t border-slate-100 mt-4">
+                    <div class="flex flex-col gap-2">
+                        <label class="text-xs font-bold text-indigo-600 uppercase tracking-tight">Gemini Prompt</label>
+                        <div class="flex flex-wrap gap-2 mb-1">
+                            <button onclick="setGeminiPrompt('summary')" class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold px-2 py-1 rounded border border-slate-300 transition-colors">Summary</button>
+                            <button onclick="setGeminiPrompt('pico')" class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold px-2 py-1 rounded border border-slate-300 transition-colors">PICO</button>
+                            <button onclick="setGeminiPrompt('pdf')" class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold px-2 py-1 rounded border border-slate-300 transition-colors">PDF URL→Summary</button>
+                            <button onclick="setGeminiPrompt('pdf_pico')" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold px-2 py-1 rounded border border-indigo-200 transition-colors">PDF URL→PICO</button>
+                        </div>
+                        <textarea id="geminiPrompt" class="w-full p-2 border rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 outline-none resize-none" rows="4">この研究のエッセンスを数行でまとめてください。</textarea>
+                        <div class="flex justify-end">
+                            <button id="executeAskBtn" onclick="executeGeminiAsk()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-8 py-2 rounded-md shadow transition-all active:scale-95">Ask</button>
+                        </div>
+                    </div>
+                    <div id="geminiResponseArea" class="mt-4 p-5 bg-slate-50 border rounded-lg hidden"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Prompts and Adapt Modals -->
+    <div id="fullPromptModal" class="modal" onclick="closeFullPromptModal()">
+        <div class="modal-content max-w-3xl" onclick="event.stopPropagation()">
+            <div class="flex justify-between items-center mb-4 border-b pb-4">
+                <h3 class="text-xl font-bold text-slate-800 flex items-center gap-2">
+                    Compiled Prompt for External AI
+                </h3>
+                <button onclick="closeFullPromptModal()" class="text-slate-400 hover:text-slate-600 p-2"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+            </div>
+            <textarea id="fullPromptTextarea" class="w-full h-96 p-4 border border-slate-300 rounded-lg outline-none resize-none text-xs font-mono bg-slate-50 text-slate-700" readonly></textarea>
+            <div class="mt-4 flex justify-end gap-3">
+                <button onclick="closeFullPromptModal()" class="px-6 py-2 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg text-sm font-bold transition-colors">Close</button>
+                <button id="btnCopyFullPrompt" onclick="copyFullPromptText()" class="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-bold shadow-sm transition-colors flex items-center gap-2">Copy Full Prompt</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="adaptPromptModal" class="modal" onclick="closeAdaptPromptModal()" style="display: none; z-index: 100;">
+        <div class="modal-content max-w-4xl" onclick="event.stopPropagation()">
+            <div class="flex justify-between items-center mb-4 border-b pb-4">
+                <h3 class="text-xl font-bold text-slate-800 flex items-center gap-2">Edit Prompt for Adaptation</h3>
+                <button onclick="closeAdaptPromptModal()" class="text-slate-400 hover:text-slate-600 p-2"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+            </div>
+            <div class="mb-4"><label class="block text-sm font-bold text-slate-700 mb-1">System Prompt</label><textarea id="editAdaptSysPrompt" class="w-full h-40 p-3 border border-slate-300 rounded-lg outline-none text-sm font-mono focus:ring-2 focus:ring-indigo-400 bg-slate-50"></textarea></div>
+            <div class="mb-4"><label class="block text-sm font-bold text-slate-700 mb-1">User Prompt (Instructions)</label><textarea id="editAdaptUserPrompt" class="w-full h-40 p-3 border border-slate-300 rounded-lg outline-none text-sm font-mono focus:ring-2 focus:ring-indigo-400 bg-slate-50"></textarea></div>
+            <div class="bg-slate-100 p-4 rounded-lg border border-slate-200 text-xs text-slate-600 mb-6 font-mono overflow-y-auto max-h-40">
+                <p class="font-bold text-slate-700 mb-1">Inclusion Criteria (Preview):</p><div id="previewInclusion" class="mb-3 whitespace-pre-wrap"></div>
+                <p class="font-bold text-slate-700 mb-1">Exclusion Criteria (Preview):</p><div id="previewExclusion" class="whitespace-pre-wrap"></div>
+            </div>
+            <div class="flex justify-end gap-3">
+                <button onclick="closeAdaptPromptModal()" class="px-4 py-2 border border-slate-300 rounded-lg text-slate-600 hover:bg-slate-50 font-bold text-sm transition-colors">Cancel</button>
+                <button onclick="saveAdaptPrompt()" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-bold text-sm shadow-sm transition-colors">Save for this session</button>
+                <button onclick="saveAdaptPromptAsDefault()" class="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 font-bold text-sm shadow-sm transition-colors">Save as Default</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
